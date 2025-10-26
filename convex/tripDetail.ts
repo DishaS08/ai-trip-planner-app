@@ -1,0 +1,61 @@
+import { v } from "convex/values";
+import { mutation } from "./_generated/server";
+import { query } from "./_generated/server";
+
+
+export const CreateTripDetail = mutation({
+    args: {
+        tripId: v.string(),
+        uid: v.id("UserTable"),
+        tripDetail: v.any()
+    },
+    handler: async (convexToJson, args) => {
+        const result = await convexToJson.db.insert("TripDetailTable", {
+            tripDetail: args.tripDetail,
+            tripId: args.tripId,
+            uid: args.uid
+        });
+    }
+})
+
+export const ViewTripById = query({
+    args: {
+        uid: v.id("UserTable"),
+        tripid: v.string()
+    },
+    handler: async (ctx, args) => {
+        const result = await ctx.db.query("TripDetailTable")
+            .filter(q => q.eq(q.field("uid"), args.uid))
+            .order('desc')           
+            .collect();
+        return result[0];
+    }
+})
+
+export const GetTripById = query({
+    args: {
+        uid: v.id("UserTable"),
+        tripid: v.string()
+    },
+    handler: async (ctx, args) => {
+        const result = await ctx.db.query("TripDetailTable")
+            .filter(q => q.and(
+                q.eq(q.field("uid"), args.uid),
+                q.eq(q.field("tripId"), args?.tripid)
+            ))            
+            .collect();
+        return result[0];
+    }
+})
+
+export const GetUserTrips = query({
+  args: {
+    uid: v.id("UserTable"),
+  },
+  handler: async (ctx, args) => {
+    const result = await ctx.db.query("TripDetailTable")
+      .filter(q => q.eq(q.field("uid"), args.uid))
+      .collect();
+    return result;
+  },
+});
