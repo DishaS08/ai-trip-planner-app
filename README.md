@@ -1,6 +1,6 @@
 # AI Trip Planner
 
-✈️ **Full Stack AI Trip Planner** built with **Next.js, TypeScript, Convex, Clerk, MapTiler, and Unsplash API**. Plan personalized trips using AI, explore destinations through interactive maps and stunning images, save your itineraries securely, and enjoy a seamless travel planning experience — all in one platform.  
+✈️ **Full Stack AI Trip Planner** built with **Next.js, TypeScript, Convex, Clerk, MapTiler, and Unsplash API**. Plan personalized trips using AI, explore destinations through interactive maps and stunning images, save your itineraries securely, and enjoy a seamless travel planning experience all in one platform.  
 
 ---
 
@@ -26,9 +26,9 @@
 
 ---
 
-## Screenshots / Demo
+## Demo
 
-💻 **Live Demo**: [https://www.planaitrip.site](https://www.planaitrip.site)  
+💻 **Live Demo**:  
 
 ---
 
