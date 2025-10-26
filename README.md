@@ -22,7 +22,7 @@
 - **Authentication**: Clerk  
 - **Maps**: MapTiler  
 - **Images**: Unsplash API  
-- **Styling**: CSS / Tailwind (if used)  
+- **Styling**: CSS / Tailwind 
 
 ---
 
