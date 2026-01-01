@@ -140,17 +140,8 @@ Contributions welcome! Please:
 4. Open a Pull Request
 
 ---
+```
 
-## 📄 License
+## 🌐 Live Project
 
-MIT License - see [LICENSE](LICENSE) file
-
----
-
-## 🙏 Credits
-
-Built with GROQ, Convex, Clerk, Unsplash, Pexels, and MapLibre GL.
-
----
-
-**Made with ❤️ by [Disha Suryawanshi](https://github.com/DishaS08)**
+Check out the live app: https://ai-trip-planner-app-five.vercel.app
