@@ -173,7 +173,7 @@ export async function POST(req: Request) {
 
     const completion = await openai.chat.completions.create({
       messages: [systemMessage, ...cleanMessages],
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-120b",
       response_format: { type: "json_object" },
     });
 
