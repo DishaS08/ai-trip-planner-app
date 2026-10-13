@@ -1,25 +1,24 @@
-
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
 const BASE_SYSTEM_PROMPT = `
-You are an AI Trip Planner Agent. Ask relevant questions one at a time.
+You are an AI Trip Planner Agent. Ask the user relevant questions one at a time.
 `;
 
 const DEFAULT_STEPS = `
 Extract known details from the conversation. Ask only missing questions in this order:
 1. Starting location — ui: "origin"
-2. Destination — ui: "destination"
+2. Destination city or country — ui: "destination"
 3. Group size (Solo, Couple, Family, Friends) — ui: "groupSize"
 4. Budget (Low, Medium, High) — ui: "budget"
 5. Trip duration in days — ui: "tripduration"
 6. Travel interests — ui: "interests"
 
-Do not ask for information the user has already provided.
+Do not repeat questions the user has already answered.
 `;
 
 const SUGGESTION_STEPS = `
-Ask only these missing questions in order:
+Ask only missing questions in this order:
 1. Group size — ui: "groupSize"
 2. Budget — ui: "budget"
 3. Trip duration in days — ui: "tripduration"
@@ -32,13 +31,13 @@ const INSTRUCTION_SUFFIX = `
 Return ONLY a valid JSON object in this format:
 {"resp":"your question","ui":"corresponding_ui"}
 
-Ask one question at a time. Never repeat a question already answered.
+Ask one question at a time. Never repeat an answered question.
 When all required answers are available, return:
 {"resp":"Generating your trip plan...","ui":"final"}
 `;
 
 const FINAL_PROMPT = `
-Generate a complete travel plan as a JSON object using this structure:
+Generate a complete travel plan as a strict JSON object using this structure:
 {
   "trip_plan": {
     "destination": "string",
@@ -92,7 +91,7 @@ Generate a complete travel plan as a JSON object using this structure:
 
 Rules:
 1. Generate exactly the number of days requested.
-2. Include a continuous daily schedule, normally from 08:00 AM.
+2. Create a continuous daily schedule, normally starting at 08:00 AM.
 3. Include meals, travel, and relaxation where appropriate.
 4. Include two specific local dishes per day.
 5. Suggest three hotels per day matching the selected budget:
@@ -100,17 +99,8 @@ Rules:
    Moderate: $50-$150/night.
    Luxury: over $150/night.
 6. Provide realistic coordinates, local-currency ticket estimates, and travel times.
-7. Return ONLY valid JSON, without Markdown or code fences.
+7. Output ONLY valid JSON without Markdown or code fences.
 `;
-
-function parseJsonResponse(text: string): unknown {
-  const cleaned = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "");
-
-  return JSON.parse(cleaned);
-}
 
 export async function POST(req: Request) {
   try {
@@ -122,7 +112,10 @@ export async function POST(req: Request) {
       console.error("OPENROUTER_API_KEY is missing.");
 
       return NextResponse.json(
-        { error: "OPENROUTER_API_KEY is missing from Vercel Environment Variables." },
+        {
+          error:
+            "OPENROUTER_API_KEY is missing from Vercel Environment Variables.",
+        },
         { status: 500 }
       );
     }
@@ -143,15 +136,15 @@ export async function POST(req: Request) {
 
     if (mode === "inspire") {
       systemPrompt +=
-        "\nTRIP MODE: INSPIRE ME. Suggest a destination based on the user's preferences.\n" +
+        "\nTRIP MODE: INSPIRE ME. Recommend a destination based on the user's preferences.\n" +
         SUGGESTION_STEPS;
     } else if (mode === "hidden-gems") {
       systemPrompt +=
-        "\nTRIP MODE: HIDDEN GEMS. Suggest an offbeat, less-touristy destination.\n" +
+        "\nTRIP MODE: HIDDEN GEMS. Recommend an offbeat, less-touristy destination.\n" +
         SUGGESTION_STEPS;
     } else if (mode === "adventure") {
       systemPrompt +=
-        "\nTRIP MODE: ADVENTURE. Suggest a destination known for adventure activities.\n" +
+        "\nTRIP MODE: ADVENTURE. Recommend a destination known for adventure activities.\n" +
         SUGGESTION_STEPS;
     } else {
       systemPrompt +=
@@ -181,11 +174,12 @@ export async function POST(req: Request) {
       }));
 
     const completion = await client.chat.completions.create({
-      model: "openrouter/free",
+      model: "openai/gpt-oss-120b",
       messages: [
         { role: "system", content: systemPrompt },
         ...cleanMessages,
       ],
+      response_format: { type: "json_object" },
     });
 
     const responseText = completion.choices[0]?.message?.content;
@@ -197,16 +191,22 @@ export async function POST(req: Request) {
       });
 
       return NextResponse.json(
-        { error: "The AI provider returned an empty response. Please try again." },
+        {
+          error: "The AI provider returned an empty response. Please try again.",
+        },
         { status: 502 }
       );
     }
 
+    const cleanedResponse = responseText
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "");
+
     try {
-      const result = parseJsonResponse(responseText);
+      const result = JSON.parse(cleanedResponse);
       return NextResponse.json(result);
     } catch (parseError) {
-      // Diagnostic logging: inspect the actual AI output in Vercel Runtime Logs.
       console.error("AI returned invalid JSON:", {
         model: completion.model,
         finishReason: completion.choices[0]?.finish_reason,
@@ -214,12 +214,13 @@ export async function POST(req: Request) {
           parseError instanceof Error
             ? parseError.message
             : "Unknown JSON parsing error",
-        response: responseText.slice(0, 1500),
+        responsePreview: responseText.slice(0, 1500),
       });
 
       return NextResponse.json(
         {
-          error: "The AI returned an invalid response format. Please try again.",
+          error:
+            "The AI returned an invalid response format. Please try again.",
         },
         { status: 502 }
       );
