@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
@@ -42,7 +43,7 @@ Generate a Travel Plan (trip_plan) as strict JSON using this schema:
     "origin": "string",
     "budget": "string",
     "group_size": "string",
-    "hotels": [], 
+    "hotels": [],
     "itinerary": [
       {
         "day": 1,
@@ -82,112 +83,118 @@ Generate a Travel Plan (trip_plan) as strict JSON using this schema:
 Output ONLY the JSON object.
 
 IMPORTANT RULES FOR GENERATION:
-1. **TRIP DURATION (CRITICAL):**
-   - You MUST generate an itinerary for the **EXACT** number of days requested.
-   - If the user asks for 7 days, you **MUST** output Day 1, Day 2, Day 3, Day 4, Day 5, Day 6, AND Day 7.
+1. TRIP DURATION (CRITICAL):
+   - Generate an itinerary for the EXACT number of days requested.
+   - If the user asks for 7 days, output Day 1 through Day 7.
    - Do NOT summarize or cut it short.
-   
-2. "itinerary":
-   - "day_plan": A short theme for the day (e.g. "Historical Tour").
-   - "best_time_to_visit_day": The best season/weather for this day's plan.
-   - "must_try_food": List 2 specific local dishes.
-   - "local_transport": Best way to get around (e.g. "Metro", "Taxi").
-   
-3. "activities" (GAP-LESS FULL DAY SCHEDULE):
-   - You **MUST** generate a continuous schedule from 08:00 AM to the **Destination's Comfort End Time**.
-   - **Comfort End Time**: Determine this based on the city's culture.
-     - **Nightlife Cities (e.g. Mumbai, NYC, Bangkok)**: Extend to 11:00 PM or 12:00 AM.
-     - **Quiet/Early Cities (e.g. Kyoto, Remote Villages)**: End earlier at 8:00 PM or 9:00 PM.
-   - **NO TIME GAPS:** The End Time of activity A must match (or be close to) the Start Time of activity B.
-   - **"best_time_to_visit"**: Format EXACTLY as "HH:MM AM - HH:MM PM".
-   - **Example Sequence**:
-     1. "08:00 AM - 09:30 AM" -> Breakfast at X
-     2. "09:30 AM - 10:00 AM" -> Travel to Y
-     3. "10:00 AM - 01:00 PM" -> Visit Y
-     4. "01:00 PM - 02:30 PM" -> Lunch at Z
-     5. "02:30 PM - 05:00 PM" -> Visit A
-   - Include **Travel** or **Relaxation** entries to fill any gaps.
-   - Mandatory: Breakfast, Lunch, Dinner.
 
-4. "suggested_hotels":
-   - **CRITICAL:** The hotel price MUST match the user's selected budget.
-     - **Cheap:** Under $50/night (Hostels, Budget Hotels).
-     - **Moderate:** $50 - $150/night (3-4 Star Hotels).
-     - **Luxury:** $150+/night (5 Star, Resorts).
-   - If user selected "Moderate", DO NOT suggest "Luxury" hotels like Taj, Oberoi, or 5-star properties.
+2. itinerary:
+   - day_plan: A short theme for the day.
+   - best_time_to_visit_day: The best season/weather for this day's plan.
+   - must_try_food: List 2 specific local dishes.
+   - local_transport: Best way to get around.
+
+3. activities (GAP-LESS FULL DAY SCHEDULE):
+   - Generate a continuous schedule from 08:00 AM to the destination's comfort end time.
+   - Nightlife cities: extend to 11:00 PM or 12:00 AM.
+   - Quiet/early cities: end around 8:00 PM or 9:00 PM.
+   - Avoid time gaps between activities.
+   - best_time_to_visit format: "HH:MM AM - HH:MM PM".
+   - Include travel or relaxation entries to fill gaps.
+   - Include breakfast, lunch, and dinner.
+
+4. suggested_hotels:
+   - Cheap: Under $50/night.
+   - Moderate: $50-$150/night.
+   - Luxury: $150+/night.
+   - Match the user's selected budget.
    - Provide 3 options per day.
-   - "description": Max 10 words.
+   - description: Maximum 10 words.
 
-5. "geo_coordinates": Real coordinates required.
-6. "ticket_pricing": Estimate price in local currency.
-7. "time_travel_each_location": Travel time from previous location.
+5. geo_coordinates: Provide real coordinates.
+6. ticket_pricing: Estimate prices in local currency.
+7. time_travel_each_location: Travel time from the previous location.
 `;
 
 export async function POST(req: Request) {
   try {
     const { messages, isFinal, mode } = await req.json();
-    const apiKey = process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
+
+    // OpenRouter API key
+    const apiKey = process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
-      console.error("API Key is not set in environment variables");
+      console.error("OPENROUTER_API_KEY is not configured");
+
       return NextResponse.json(
-        { error: "Server Configuration Error: API Key (GROQ_API_KEY) is missing. Please add it to .env.local" },
+        { error: "Server configuration error: OPENROUTER_API_KEY is missing. Add it in Vercel Environment Variables." },
         { status: 500 }
       );
     }
 
+    // Connect to OpenRouter using the OpenAI SDK
     const openai = new OpenAI({
-      apiKey: apiKey,
-      baseURL: "https://api.groq.com/openai/v1",
+      apiKey,
+      baseURL: "https://openrouter.ai/api/v1",
     });
 
-    const cleanMessages = messages?.map((msg: any) => ({
-      role: msg.role === 'ui' ? 'user' : msg.role, // Ensure role is valid (user/assistant)
-      content: msg.content
-    })).filter((msg: any) => ['user', 'assistant', 'system'].includes(msg.role)) || [];
+    const cleanMessages = messages
+      ?.map((msg: any) => ({
+        role: msg.role === "ui" ? "user" : msg.role,
+        content: msg.content,
+      }))
+      .filter((msg: any) =>
+        ["user", "assistant", "system"].includes(msg.role)
+      ) || [];
 
-    // Select Prompt based on Mode
+    // Select prompt based on trip mode
     let systemPrompt = BASE_SYSTEM_PROMPT;
 
-    if (mode === 'inspire') {
+    if (mode === "inspire") {
       systemPrompt += `\nTRIP MODE: INSPIRE ME. The user has no specific destination. You must suggest a great destination based on their preferences.\n${SUGGESTION_STEPS}`;
-    } else if (mode === 'hidden-gems') {
+    } else if (mode === "hidden-gems") {
       systemPrompt += `\nTRIP MODE: HIDDEN GEMS. The user wants to discover off-beat, non-touristy locations. Suggest a hidden gem destination.\n${SUGGESTION_STEPS}`;
-    } else if (mode === 'adventure') {
+    } else if (mode === "adventure") {
       systemPrompt += `\nTRIP MODE: ADVENTURE. The user seeks thrill and adventure. Suggest a destination known for adventure sports or activities.\n${SUGGESTION_STEPS}`;
     } else {
-      // Default or 'create'
       systemPrompt += `\nTRIP MODE: STANDARD. The user will specify a destination.\n${DEFAULT_STEPS}`;
     }
 
     systemPrompt += INSTRUCTION_SUFFIX;
 
     if (isFinal) {
-      systemPrompt = FINAL_PROMPT; // Override for final generation
+      systemPrompt = FINAL_PROMPT;
     }
 
     const systemMessage = {
-      role: "system",
-      content: systemPrompt
+      role: "system" as const,
+      content: systemPrompt,
     };
 
     const completion = await openai.chat.completions.create({
       messages: [systemMessage, ...cleanMessages],
-      model: "openai/gpt-oss-120b",
+      model: "openrouter/free",
       response_format: { type: "json_object" },
     });
 
-    const responseText = completion.choices[0].message.content;
+    const responseText = completion.choices[0]?.message?.content;
 
     if (!responseText) {
-      return NextResponse.json({ error: "No response from OpenAI" }, { status: 500 });
+      return NextResponse.json(
+        { error: "No response from the AI provider." },
+        { status: 500 }
+      );
     }
 
     const json = JSON.parse(responseText);
-    return NextResponse.json(json);
 
+    return NextResponse.json(json);
   } catch (e: any) {
-    console.error("Route Error:", e);
-    return NextResponse.json({ error: e.message || "Internal Server Error" }, { status: 500 });
+    console.error("OpenRouter route error:", e);
+
+    return NextResponse.json(
+      { error: e.message || "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }
