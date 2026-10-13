@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
@@ -30,7 +31,6 @@ Do not ask for origin or destination. Choose a destination based on the user's a
 const INSTRUCTION_SUFFIX = `
 Return ONLY a valid JSON object in this format:
 {"resp":"your question","ui":"corresponding_ui"}
-
 Ask one question at a time. Never repeat an answered question.
 When all required answers are available, return:
 {"resp":"Generating your trip plan...","ui":"final"}
@@ -88,7 +88,6 @@ Generate a complete travel plan as a strict JSON object using this structure:
     ]
   }
 }
-
 Rules:
 1. Generate exactly the number of days requested.
 2. Create a continuous daily schedule, normally starting at 08:00 AM.
@@ -102,28 +101,33 @@ Rules:
 7. Output ONLY valid JSON without Markdown or code fences.
 `;
 
+const FREE_MODELS = [
+  "openrouter/free",
+  "openai/gpt-oss-120b:free",
+  "google/gemma-3-27b-it:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+];
+
 export async function POST(req: Request) {
   try {
     const { messages, isFinal, mode } = await req.json();
 
+    if (!Array.isArray(messages)) {
+      return NextResponse.json(
+        { error: "Invalid request: messages must be an array." },
+        { status: 400 }
+      );
+    }
+
     const apiKey = process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
-      console.error("OPENROUTER_API_KEY is missing.");
-
       return NextResponse.json(
         {
           error:
             "OPENROUTER_API_KEY is missing from Vercel Environment Variables.",
         },
         { status: 500 }
-      );
-    }
-
-    if (!Array.isArray(messages)) {
-      return NextResponse.json(
-        { error: "Invalid request: messages must be an array." },
-        { status: 400 }
       );
     }
 
@@ -173,65 +177,96 @@ export async function POST(req: Request) {
         content: msg.content,
       }));
 
-    const completion = await client.chat.completions.create({
-      model: "openai/gpt-oss-120b",
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...cleanMessages,
-      ],
-      response_format: { type: "json_object" },
-    });
+    const errors: string[] = [];
 
-    const responseText = completion.choices[0]?.message?.content;
+    for (const model of FREE_MODELS) {
+      try {
+        console.log(`Trying free AI model: ${model}`);
 
-    if (!responseText || !responseText.trim()) {
-      console.error("OpenRouter returned an empty response.", {
-        model: completion.model,
-        finishReason: completion.choices[0]?.finish_reason,
-      });
+        const completion = await client.chat.completions.create({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...cleanMessages,
+          ],
+          response_format: { type: "json_object" },
+        });
 
-      return NextResponse.json(
-        {
-          error: "The AI provider returned an empty response. Please try again.",
-        },
-        { status: 502 }
-      );
+        const responseText =
+          completion.choices[0]?.message?.content;
+
+        if (!responseText || !responseText.trim()) {
+          errors.push(`${model}: empty response`);
+          continue;
+        }
+
+        const cleanedResponse = responseText
+          .trim()
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```$/i, "");
+
+        try {
+          const result = JSON.parse(cleanedResponse);
+
+          // Validate the response shape expected by the frontend.
+          if (
+            isFinal &&
+            (!result.trip_plan ||
+              typeof result.trip_plan !== "object")
+          ) {
+            errors.push(`${model}: missing trip_plan in JSON`);
+            continue;
+          }
+
+          if (
+            !isFinal &&
+            (typeof result.resp !== "string" ||
+              typeof result.ui !== "string")
+          ) {
+            errors.push(`${model}: missing resp/ui in JSON`);
+            continue;
+          }
+
+          console.log(`Successful AI response from: ${model}`);
+          return NextResponse.json(result);
+        } catch {
+          errors.push(`${model}: response was not valid JSON`);
+          console.error(`Invalid JSON returned by ${model}:`, {
+            responsePreview: responseText.slice(0, 300),
+          });
+        }
+      } catch (error: any) {
+        const message =
+          error?.message || "Unknown provider error";
+
+        errors.push(
+          `${model}: ${message}`
+        );
+
+        console.error(`Free model failed: ${model}`, {
+          message,
+          status: error?.status,
+          code: error?.code,
+        });
+      }
     }
 
-    const cleanedResponse = responseText
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/i, "");
+    // No hardcoded itinerary: report the actual model failures.
+    console.error("All free AI models failed:", errors);
 
-    try {
-      const result = JSON.parse(cleanedResponse);
-      return NextResponse.json(result);
-    } catch (parseError) {
-      console.error("AI returned invalid JSON:", {
-        model: completion.model,
-        finishReason: completion.choices[0]?.finish_reason,
-        parseError:
-          parseError instanceof Error
-            ? parseError.message
-            : "Unknown JSON parsing error",
-        responsePreview: responseText.slice(0, 1500),
-      });
-
-      return NextResponse.json(
-        {
-          error:
-            "The AI returned an invalid response format. Please try again.",
-        },
-        { status: 502 }
-      );
-    }
+    return NextResponse.json(
+      {
+        error:
+          "All configured free AI models failed. Please retry shortly.",
+        details: errors,
+      },
+      { status: 502 }
+    );
   } catch (error: any) {
-    console.error("OpenRouter route error:", {
+    console.error("Trip planner route error:", {
       message: error?.message,
       status: error?.status,
       code: error?.code,
-      type: error?.type,
-      providerError: error?.error,
     });
 
     const status =
@@ -243,9 +278,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
-        error: `AI provider request failed: ${
-          error?.message || "Unknown server error"
-        }`,
+        error:
+          error?.message || "An unexpected trip planner error occurred.",
       },
       { status }
     );
