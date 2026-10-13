@@ -99,25 +99,13 @@ Rules:
    Luxury: over $150/night.
 6. Provide realistic coordinates, local-currency ticket estimates, and travel times.
 7. Output ONLY valid JSON without Markdown or code fences.
+8. Do not invent certainty: identify estimates as estimates where necessary.
 `;
-
-const FREE_MODELS = [
-  "openrouter/free",
-  "openai/gpt-oss-120b:free",
-  "google/gemma-3-27b-it:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-];
 
 export async function POST(req: Request) {
   try {
-    const { messages, isFinal, mode } = await req.json();
-
-    if (!Array.isArray(messages)) {
-      return NextResponse.json(
-        { error: "Invalid request: messages must be an array." },
-        { status: 400 }
-      );
-    }
+    const body = await req.json();
+    const { messages, isFinal, mode } = body ?? {};
 
     const apiKey = process.env.OPENROUTER_API_KEY;
 
@@ -131,9 +119,20 @@ export async function POST(req: Request) {
       );
     }
 
+    if (!Array.isArray(messages)) {
+      return NextResponse.json(
+        { error: "Invalid request: messages must be an array." },
+        { status: 400 }
+      );
+    }
+
     const client = new OpenAI({
       apiKey,
       baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://ai-trip-planner-app-five.vercel.app",
+        "X-Title": "AI Trip Planner",
+      },
     });
 
     let systemPrompt = BASE_SYSTEM_PROMPT;
@@ -177,109 +176,145 @@ export async function POST(req: Request) {
         content: msg.content,
       }));
 
-    const errors: string[] = [];
-
-    for (const model of FREE_MODELS) {
-      try {
-        console.log(`Trying free AI model: ${model}`);
-
-        const completion = await client.chat.completions.create({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...cleanMessages,
-          ],
-          response_format: { type: "json_object" },
-        });
-
-        const responseText =
-          completion.choices[0]?.message?.content;
-
-        if (!responseText || !responseText.trim()) {
-          errors.push(`${model}: empty response`);
-          continue;
-        }
-
-        const cleanedResponse = responseText
-          .trim()
-          .replace(/^```(?:json)?\s*/i, "")
-          .replace(/\s*```$/i, "");
-
-        try {
-          const result = JSON.parse(cleanedResponse);
-
-          // Validate the response shape expected by the frontend.
-          if (
-            isFinal &&
-            (!result.trip_plan ||
-              typeof result.trip_plan !== "object")
-          ) {
-            errors.push(`${model}: missing trip_plan in JSON`);
-            continue;
-          }
-
-          if (
-            !isFinal &&
-            (typeof result.resp !== "string" ||
-              typeof result.ui !== "string")
-          ) {
-            errors.push(`${model}: missing resp/ui in JSON`);
-            continue;
-          }
-
-          console.log(`Successful AI response from: ${model}`);
-          return NextResponse.json(result);
-        } catch {
-          errors.push(`${model}: response was not valid JSON`);
-          console.error(`Invalid JSON returned by ${model}:`, {
-            responsePreview: responseText.slice(0, 300),
-          });
-        }
-      } catch (error: any) {
-        const message =
-          error?.message || "Unknown provider error";
-
-        errors.push(
-          `${model}: ${message}`
-        );
-
-        console.error(`Free model failed: ${model}`, {
-          message,
-          status: error?.status,
-          code: error?.code,
-        });
-      }
+    if (cleanMessages.length === 0) {
+      return NextResponse.json(
+        { error: "No valid conversation messages were provided." },
+        { status: 400 }
+      );
     }
 
-    // No hardcoded itinerary: report the actual model failures.
-    console.error("All free AI models failed:", errors);
-
-    return NextResponse.json(
-      {
-        error:
-          "All configured free AI models failed. Please retry shortly.",
-        details: errors,
-      },
-      { status: 502 }
-    );
-  } catch (error: any) {
-    console.error("Trip planner route error:", {
-      message: error?.message,
-      status: error?.status,
-      code: error?.code,
+    const completion = await client.chat.completions.create({
+      model: "openrouter/free",
+      messages: [
+        {
+          role: "system",
+          content:
+            systemPrompt +
+            "\nReturn a JSON object only. Do not include safety labels, explanations, Markdown, or text outside the JSON.",
+        },
+        ...cleanMessages,
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.4,
     });
 
+    const responseText = completion.choices[0]?.message?.content;
+
+    if (!responseText || !responseText.trim()) {
+      console.error("OpenRouter returned an empty response.", {
+        model: completion.model,
+        finishReason: completion.choices[0]?.finish_reason,
+      });
+
+      return NextResponse.json(
+        {
+          error: "The AI provider returned an empty response. Please retry.",
+          model: completion.model,
+        },
+        { status: 502 }
+      );
+    }
+
+    const cleanedResponse = responseText
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "");
+
+    let result: any;
+
+    try {
+      result = JSON.parse(cleanedResponse);
+    } catch (parseError) {
+      console.error("AI returned invalid JSON.", {
+        model: completion.model,
+        finishReason: completion.choices[0]?.finish_reason,
+        parseError:
+          parseError instanceof Error
+            ? parseError.message
+            : "Unknown JSON parsing error",
+        responsePreview: responseText.slice(0, 1000),
+      });
+
+      return NextResponse.json(
+        {
+          error:
+            "The AI returned an invalid JSON response. Please retry.",
+          model: completion.model,
+        },
+        { status: 502 }
+      );
+    }
+
+    if (
+      !result ||
+      typeof result !== "object" ||
+      Array.isArray(result)
+    ) {
+      return NextResponse.json(
+        { error: "The AI response was not a valid JSON object." },
+        { status: 502 }
+      );
+    }
+
+    if (isFinal && !result.trip_plan) {
+      console.error("Final AI response is missing trip_plan.", {
+        model: completion.model,
+        responsePreview: JSON.stringify(result).slice(0, 1000),
+      });
+
+      return NextResponse.json(
+        {
+          error: "The AI response did not contain a trip_plan. Please retry.",
+          model: completion.model,
+        },
+        { status: 502 }
+      );
+    }
+
+    if (
+      !isFinal &&
+      (typeof result.resp !== "string" ||
+        typeof result.ui !== "string")
+    ) {
+      console.error("AI response is missing resp or ui.", {
+        model: completion.model,
+        responsePreview: JSON.stringify(result).slice(0, 1000),
+      });
+
+      return NextResponse.json(
+        {
+          error: "The AI response did not match the expected chat format.",
+          model: completion.model,
+        },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json(result);
+  } catch (error: any) {
     const status =
       typeof error?.status === "number" &&
       error.status >= 400 &&
-      error.status < 600
+      error.status <= 599
         ? error.status
-        : 500;
+        : 502;
+
+    console.error("OpenRouter route error:", {
+      message: error?.message,
+      status: error?.status,
+      code: error?.code,
+      type: error?.type,
+      providerError: error?.error,
+    });
 
     return NextResponse.json(
       {
-        error:
-          error?.message || "An unexpected trip planner error occurred.",
+        error: "The AI provider request failed.",
+        details:
+          typeof error?.message === "string"
+            ? error.message
+            : "Unknown provider error",
+        status,
       },
       { status }
     );
